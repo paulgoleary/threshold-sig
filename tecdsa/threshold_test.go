@@ -244,8 +244,8 @@ func TestTwoPartyECDSA(t *testing.T) {
 	/*
 	where 'sid' is session ID ...
 	1. P1’s first message:
-		(a) P1 chooses a random k1 ← Zq and computes R1 = k1 · G.
-		(b) P1 sends (com-prove, sid|1, R1, k1) to FRDLcom-zk. TODO: no ZK for now ...
+		(a) P1 chooses a random keyShare ← Zq and computes R1 = keyShare · G.
+		(b) P1 sends (com-prove, sid|1, R1, keyShare) to FRDLcom-zk. TODO: no ZK for now ...
 	 */
 	k1 := makeRandoIntWithOrder(Zq)
 	xR1, yR1 := theCurve.ScalarBaseMult(k1.Bytes())
