@@ -12,7 +12,7 @@ import (
 )
 
 // TODO: gotta be the same function somewhere else ...? maybe not public tho :/
-func makeRandoIntWithOrder(N *big.Int) *big.Int {
+func MakeRandoIntWithOrder(N *big.Int) *big.Int {
 	randoIntBytes := make([]byte, N.BitLen() / 8)
 	rand.Read(randoIntBytes)
 	randoInt := new(big.Int).SetBytes(randoIntBytes)
@@ -29,16 +29,17 @@ type TwoPartyTrustedDealerProtocol struct {
 
 	// shared state for protocol
 	sessionId []byte // something like hash of session keys?
-	sessionOrd *big.Int
 	cKey []byte
 	sessionPK *paillier.PublicKey
 
 	// player-specific session state
 	keyShare *big.Int
+	sessionOrd *big.Int
 
 	// player-specific round state
 	signKey *big.Int
-
+	p1CP    *SignCommitProve
+	p2CP    *SignCommitProve
 }
 type TPTDProtocol TwoPartyTrustedDealerProtocol // abbreviation :)
 
@@ -52,7 +53,7 @@ func (p *TPTDProtocol) MakeKeyShares(privKey *big.Int) (*big.Int, *big.Int, erro
 	// in the protocol i want to simulate we assume:
 	// . alice has an existing public + private key pair
 	// . alice acts as a trusted dealer and creates multiplicative shares of the private key x - which we call x1, x2
-	x1 := makeRandoIntWithOrder(Zq)
+	x1 := MakeRandoIntWithOrder(Zq)
 
 	x2 := new(big.Int).ModInverse(x1, Zq)
 	x2.Mul(x2, privKey)
@@ -115,6 +116,10 @@ func (p *TPTDProtocol) InitP2Session(keyShare *big.Int, p1Ckey, sessionId []byte
 	return nil
 }
 
+func (p *TPTDProtocol) getSessionOrd() int64 {
+	return p.sessionOrd.Int64()
+}
+
 func computeChallenge(hasher hash.Hash, Gx, Tx, Ax *big.Int, optIdent []byte) *big.Int {
 	hasher.Write(Gx.Bytes())
 	hasher.Write(Tx.Bytes())
@@ -130,7 +135,7 @@ func (p *TPTDProtocol) commitProve(A *ecdsa.PrivateKey, optIdent []byte) (r, tx,
 	hasher := p.hasher()
 	theCurve := p.theCurve
 
-	v := makeRandoIntWithOrder(theCurve.Params().N)
+	v := MakeRandoIntWithOrder(theCurve.Params().N)
 	tx, ty = theCurve.ScalarBaseMult(v.Bytes())
 
 	// prover computes c = H(g, y, t)
@@ -144,10 +149,24 @@ func (p *TPTDProtocol) commitProve(A *ecdsa.PrivateKey, optIdent []byte) (r, tx,
 	return
 }
 
+// TODO: could cache calculation of generator...
+func (p *TPTDProtocol) isCurveGenerator(x, y *big.Int) bool {
+	Gx, Gy := p.theCurve.ScalarBaseMult(big.NewInt(1).Bytes())
+	if Gx.Cmp(x) == 0 && Gy.Cmp(y) == 0 {
+		return true
+	}
+	return false
+}
+
 func (p *TPTDProtocol) proveVerify(r, Tx, Ty, Ax, Ay *big.Int, optIdent []byte) bool {
 
 	theCurve := p.theCurve
 	hasher := p.hasher()
+
+	// check that point is valid and non-trivial
+	if !theCurve.IsOnCurve(Ax, Ay) || p.isCurveGenerator(Ax, Ay) {
+		return false
+	}
 
 	// verifier computes challenge
 	c := computeChallenge(hasher, theCurve.Params().Gx, Tx, Ax, optIdent)
@@ -165,15 +184,13 @@ func (p *TPTDProtocol) proveVerify(r, Tx, Ty, Ax, Ay *big.Int, optIdent []byte) 
 
 func (p *TPTDProtocol) generateSignKeyAndProof() *SignCommitProve {
 
-	p.signKey = makeRandoIntWithOrder(p.theCurve.Params().N) // generate and save signKey
+	p.signKey = MakeRandoIntWithOrder(p.theCurve.Params().N) // generate and save signKey
 
 	Rx, Ry := p.theCurve.ScalarBaseMult(p.signKey.Bytes())
 	R1 := ecdsa.PublicKey{Curve:p.theCurve, X: Rx, Y: Ry}
 
 	p.sessionOrd.Add(p.sessionOrd, big.NewInt(1))
-	sessIdent := append(p.sessionId, p.sessionOrd.Bytes()...)
-
-	r, tx, ty := p.commitProve(&ecdsa.PrivateKey{PublicKey: R1, D: p.signKey}, sessIdent)
+	r, tx, ty := p.commitProve(&ecdsa.PrivateKey{PublicKey: R1, D: p.signKey}, p.makeSessionIdent(p.sessionOrd))
 
 	return &SignCommitProve{r, tx, ty, Rx, Ry}
 }
@@ -183,22 +200,64 @@ type SignCommitProve struct {
 	Rx, Ry    *big.Int // elements of gen ^ signKey
 }
 
+func (cp *SignCommitProve) checkCommit(checkCP *SignCommitProve) bool {
+	return cp.R.Cmp(checkCP.R) == 0 && cp.Tx.Cmp(checkCP.Tx) == 0 && cp.Ty.Cmp(cp.Ty) == 0
+}
+
+func (p *TPTDProtocol) clearRound() {
+	p.signKey = nil
+	p.p1CP = nil
+	p.p2CP = nil
+}
+
 func (p *TPTDProtocol) P1M1() (*SignCommitProve, error) {
+	p.p1CP = p.generateSignKeyAndProof()
+	commitProof := *p.p1CP
+	commitProof.Rx = nil
+	commitProof.Ry = nil
+	return &commitProof, nil
+}
+
+func (p *TPTDProtocol) P2M1(p1CP *SignCommitProve) (*SignCommitProve, error) {
+	p.p1CP = p1CP // store P1's opening proof
+	// p1 will have incremented their session ord
+	p.sessionOrd.Add(p.sessionOrd, big.NewInt(1))
+	// this also inits signKey
 	return p.generateSignKeyAndProof(), nil
 }
 
-func (p *TPTDProtocol) P2M1(p1CP *SignCommitProve, msgHash []byte) (*SignCommitProve, []byte, error) {
+func (p *TPTDProtocol) makeSessionIdent(ord *big.Int) []byte {
+	ident := make([]byte, len(p.sessionId))
+	copy(ident, p.sessionId)
+	return append(ident, ord.Bytes()...)
+}
 
+func (p *TPTDProtocol) P1M2(p2CP *SignCommitProve) (*SignCommitProve, error) {
+
+	// p2 will have incremented their session ord
 	p.sessionOrd.Add(p.sessionOrd, big.NewInt(1))
-	sessIdent := append(p.sessionId, p.sessionOrd.Bytes()...)
-
-	verify := p.proveVerify(p1CP.R, p1CP.Tx, p1CP.Ty, p1CP.Rx, p1CP.Ry, sessIdent)
+	verify := p.proveVerify(p2CP.R, p2CP.Tx, p2CP.Ty, p2CP.Rx, p2CP.Ry, p.makeSessionIdent(p.sessionOrd))
 	if !verify {
-		return nil, nil, fmt.Errorf("protocol failure - proof did not verify")
+		return nil, fmt.Errorf("protocol failure - proof did not verify")
 	}
 
-	// this also inits signKey
-	signKeyProof := p.generateSignKeyAndProof()
+	p.p2CP = p2CP;
+	return p.p1CP, nil
+}
+
+func (p *TPTDProtocol) P2M2(p1CP *SignCommitProve, msgHash []byte) ([]byte, error) {
+
+	if !p.p1CP.checkCommit(p1CP) {
+		return nil, fmt.Errorf("protocol failure - commit failure")
+	}
+
+	// p1's proof session ord should be one behind me right now
+	checkSessionOrd := big.NewInt(-1)
+	checkSessionOrd.Add(checkSessionOrd, p.sessionOrd)
+	verify := p.proveVerify(p1CP.R, p1CP.Tx, p1CP.Ty, p1CP.Rx, p1CP.Ry, p.makeSessionIdent(checkSessionOrd))
+	if !verify {
+		return nil, fmt.Errorf("protocol failure - proof did not verify")
+	}
 
 	Zq := p.theCurve.Params().N
 
@@ -206,7 +265,7 @@ func (p *TPTDProtocol) P2M1(p1CP *SignCommitProve, msgHash []byte) (*SignCommitP
 	r2 := new(big.Int).Mod(Rx2, Zq)
 
 	Zq2 := new(big.Int).Exp(Zq, big.NewInt(2), nil)
-	rho := makeRandoIntWithOrder(Zq2)
+	rho := MakeRandoIntWithOrder(Zq2)
 
 	mPrime := new(big.Int).SetBytes(msgHash)
 
@@ -229,22 +288,16 @@ func (p *TPTDProtocol) P2M1(p1CP *SignCommitProve, msgHash []byte) (*SignCommitP
 
 	c3 := paillier.AddCipher(p.sessionPK, c1, c2)
 
-	return signKeyProof, c3, nil
+	p.clearRound()
+
+	return c3, nil
 }
 
-func (p *TPTDProtocol) P1Gen(p2CP *SignCommitProve, c3, msgHash []byte) (*big.Int, *big.Int, error) {
-
-	p.sessionOrd.Add(p.sessionOrd, big.NewInt(1))
-	sessIdent := append(p.sessionId, p.sessionOrd.Bytes()...)
-
-	verify := p.proveVerify(p2CP.R, p2CP.Tx, p2CP.Ty, p2CP.Rx, p2CP.Ry, sessIdent)
-	if !verify {
-		return nil, nil, fmt.Errorf("protocol failure - proof did not verify")
-	}
+func (p *TPTDProtocol) P1Gen(c3, msgHash []byte) (*big.Int, *big.Int, error) {
 
 	Zq := p.theCurve.Params().N
 
-	Rx1, _ := p.theCurve.ScalarMult(p2CP.Rx, p2CP.Ry, p.signKey.Bytes())
+	Rx1, _ := p.theCurve.ScalarMult(p.p2CP.Rx, p.p2CP.Ry, p.signKey.Bytes())
 	r := new(big.Int).Mod(Rx1, Zq)
 
 	spBytes, _ := paillier.Decrypt(p.sessionSK, c3)
@@ -259,6 +312,8 @@ func (p *TPTDProtocol) P1Gen(p2CP *SignCommitProve, c3, msgHash []byte) (*big.In
 	if maybeSmaller.Cmp(s) < 0 {
 		s = maybeSmaller
 	}
+
+	p.clearRound()
 
 	return r, s, nil
 }

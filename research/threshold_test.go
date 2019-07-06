@@ -1,4 +1,4 @@
-package tecdsa
+package research
 
 import (
 	"crypto/ecdsa"
@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/ecies"
 	"github.com/ethereum/go-ethereum/crypto/secp256k1"
+	"github.com/paulgoleary/cloud-sigman/tecdsa"
 	"github.com/roasbeef/go-go-gadget-paillier"
 	"math/big"
 	"testing"
@@ -169,7 +170,7 @@ func TestShareConversion(t *testing.T) {
 		t.Errorf("homomorphic multiplication of cA and b failed, expect %v, got %v", checkAB, cAbCheck)
 	}
 
-	betaPrime := makeRandoIntWithOrder(ahsPrivKeyAlice.N)
+	betaPrime := tecdsa.MakeRandoIntWithOrder(ahsPrivKeyAlice.N)
 
 	// cB = Ea(ab + β′)
 	cB := paillier.Add(&ahsPrivKeyAlice.PublicKey, cAb, betaPrime.Bytes())
@@ -210,7 +211,7 @@ func TestTwoPartyECDSA(t *testing.T) {
 	// in the protocol i want to simulate we assume:
 	// . alice has an existing public + private key pair
 	// . alice acts as a trusted dealer and creates multiplicative shares of the private key x - which we call x1, x2
-	x1 := makeRandoIntWithOrder(Zq)
+	x1 := tecdsa.MakeRandoIntWithOrder(Zq)
 
 	x2 := new(big.Int).ModInverse(x1, Zq)
 	x2.Mul(x2, privAlice.D)
@@ -247,7 +248,7 @@ func TestTwoPartyECDSA(t *testing.T) {
 		(a) P1 chooses a random keyShare ← Zq and computes R1 = keyShare · G.
 		(b) P1 sends (com-prove, sid|1, R1, keyShare) to FRDLcom-zk. TODO: no ZK for now ...
 	 */
-	k1 := makeRandoIntWithOrder(Zq)
+	k1 := tecdsa.MakeRandoIntWithOrder(Zq)
 	xR1, yR1 := theCurve.ScalarBaseMult(k1.Bytes())
 	R1 := ecdsa.PublicKey{ Curve:theCurve, X: xR1, Y: yR1}
 
@@ -258,7 +259,7 @@ func TestTwoPartyECDSA(t *testing.T) {
 		(c) P2 sends (prove, sidk2, R2, k2) to FRDLzk .
 	 */
 
-	k2 := makeRandoIntWithOrder(Zq)
+	k2 := tecdsa.MakeRandoIntWithOrder(Zq)
 	xR2, yR2 := theCurve.ScalarBaseMult(k2.Bytes())
 	R2 := ecdsa.PublicKey{ Curve: theCurve, X: xR2, Y: yR2}
 
@@ -283,7 +284,7 @@ func TestTwoPartyECDSA(t *testing.T) {
 	r2 := new(big.Int).Mod(Rx2, Zq)
 
 	Zq2 := new(big.Int).Exp(Zq, big.NewInt(2), nil)
-	rho := makeRandoIntWithOrder(Zq2)
+	rho := tecdsa.MakeRandoIntWithOrder(Zq2)
 
 	// compute c1 ...
 	qRho := new(big.Int).Mul(rho, Zq) // assume not mod since easily within order of Paillier
@@ -355,11 +356,11 @@ func TestBasicSchnorr(t *testing.T) {
 	privAlice, _ := ecies.GenerateKey(rand.Reader, theCurve, nil)
 
 	// Alice picks a random v in Zq, computes t = g^v and sends t to Bob.
-	v := makeRandoIntWithOrder(Zq)
+	v := tecdsa.MakeRandoIntWithOrder(Zq)
 	tx, ty := theCurve.ScalarBaseMult(v.Bytes())
 
 	// Bob picks a random c in Zq (the challenge) and sends it to Alice.
-	c := makeRandoIntWithOrder(Zq)
+	c := tecdsa.MakeRandoIntWithOrder(Zq)
 
 	// Alice computes r = v - cx mod Zq and returns r to Bob.
 	r := new(big.Int).Mul(c, privAlice.D)
@@ -384,7 +385,7 @@ func TestNIZKSchnorr(t *testing.T) {
 	// these steps are the same as the interactive protocol ...
 	privAlice, _ := ecies.GenerateKey(rand.Reader, theCurve, nil)
 
-	v := makeRandoIntWithOrder(Zq)
+	v := tecdsa.MakeRandoIntWithOrder(Zq)
 	tx, ty := theCurve.ScalarBaseMult(v.Bytes())
 
 	hasher := sha256.New()
