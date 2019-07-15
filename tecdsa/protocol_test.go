@@ -29,10 +29,10 @@ func TestProtocolBasics(t *testing.T) {
 
 	start := time.Now()
 
-	iterations := int64(1000)
+	iterations := int64(100)
 	for i := int64(0); i < iterations; i++ {
 
-		if i > 0 && i % 100 == 0 {
+		if i > 0 && i % 10 == 0 {
 			log.Printf("at iteration %v\n", i)
 		}
 
